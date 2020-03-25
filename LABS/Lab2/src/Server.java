@@ -174,7 +174,7 @@ class MultiCastProcess implements Runnable{
         try {
             InetAddress group = InetAddress.getByName(this.mcastAddr);
             DatagramPacket packet = new DatagramPacket(buf,buf.length,group,mcastPort);
-            
+
             socket.send(packet);
             System.out.println("multicast: " + this.mcastAddr + " " + this.mcastPort  + " : " + this.serverAddr + " " + serverPort);
         }
