@@ -34,11 +34,9 @@ public class SSLEngineServer {
         }
     }
 
-    public void accept() throws SSLManagerException {
+    public SSLServerInterface accept() throws SSLManagerException {
         try {
-            SSLServerInterface s = new SSLServerInterface(channel.accept(),this.context);
-            System.out.println("starting hadshakee");
-            s.handshake();
+            return new SSLServerInterface(channel.accept(), this.context);
         }
         catch (SSLManagerException | IOException e) {
             throw new SSLManagerException(e.getMessage());

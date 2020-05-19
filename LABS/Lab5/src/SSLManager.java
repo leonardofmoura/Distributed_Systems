@@ -8,14 +8,15 @@ import java.security.*;
 import java.security.cert.CertificateException;
 
 public abstract class SSLManager {
-    static boolean DEBUG = true;
+    static boolean DEBUG = false;
 
     private SSLContext context;
     private SSLSession session;
     private SSLEngine engine;
     private SocketChannel channel;
 
-    private boolean init;
+    private boolean init = false;
+    private boolean handshakeComplete = false;
 
     private ByteBuffer outAppData;  //The outgoing data before being wrapped by SSLEngine
     private ByteBuffer outNetData;  //The outgoing data after being wrapped by SSLEngine, ready to be sent over the network
@@ -52,9 +53,7 @@ public abstract class SSLManager {
         }
     }
 
-    public SSLManager() {
-        this.init = false;
-    }
+    public SSLManager() {}
 
     public SSLManager(SocketChannel channel,InetSocketAddress address, SSLContext context, boolean client) throws SSLManagerException {
         this.init(channel,address,context,client);
@@ -122,6 +121,7 @@ public abstract class SSLManager {
         }
     }
 
+    //Assumes all buffers start in write mode
     private SSLEngineResult unwrap() throws SSLManagerException {
        try {
            //Process the incoming data
@@ -147,13 +147,16 @@ public abstract class SSLManager {
 
                case BUFFER_UNDERFLOW:
                    this.debugPrint("\tbuffer underflow");
-                   //inNetData does needs data -> read from the socket
+                   //inNetData needs data -> read from the socket
 
                    if (!engine.isInboundDone()) {
                        int bytes = this.channel.read(this.inNetData);
-                       if (DEBUG) {
-                           System.out.println("\tchannel read: " + bytes + "bytes");
+                       if (bytes < 0) {
+                           //Nothing to read
+                           return res;
                        }
+
+                       this.debugPrint("\tchannel read: " + bytes + "bytes");
                    }
 
                    //TODO check if the data is total when unwrapped
@@ -277,9 +280,37 @@ public abstract class SSLManager {
             }
 
             System.out.println("Handshake finished with status" + status.toString());
+            this.handshakeComplete = true;
         }
         catch (SSLException e) {
            throw new SSLManagerException(e.getMessage());
+        }
+    }
+
+    public byte[] read() throws SSLManagerException {
+        if (handshakeComplete) {
+            this.unwrap();
+            this.inAppData.flip();
+
+            byte[] ret = new byte[this.inAppData.remaining()];
+            this.inAppData.get(ret);
+
+            return ret;
+        }
+        else {
+            throw new SSLManagerException("Handshake must be preformed before reading");
+        }
+    }
+
+    public int write(byte[] msg) throws SSLManagerException {
+        if (handshakeComplete) {
+            this.outAppData.put(msg);
+
+            SSLEngineResult res = this.wrapAndSend();
+            return res.bytesProduced();
+        }
+        else {
+            throw new SSLManagerException("Handshake must be preformed before writing");
         }
     }
 }

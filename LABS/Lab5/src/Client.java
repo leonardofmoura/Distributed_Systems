@@ -1,11 +1,6 @@
-import javax.net.ssl.*;
 import java.io.*;
-import java.net.InetSocketAddress;
 import java.net.SocketException;
-import java.nio.ByteBuffer;
-import java.nio.channels.SocketChannel;
-import java.security.*;
-import java.security.cert.CertificateException;
+import java.nio.charset.StandardCharsets;
 
 public class Client {
     public static void main(String[] args) throws IOException {
@@ -19,7 +14,6 @@ public class Client {
 
         String operation, operands;
 
-        /*
         // Send the corresponding packet
         if (args[2].equals("register") && args.length == 5) {
             client.register(args[3],args[4]);
@@ -40,36 +34,39 @@ public class Client {
         String answer = client.waitForMessage();
 
         client.log(operation + " " + operands + " : " + answer);
-
-         */
     }
 
     static void printUsage() {
-        System.out.println("usage: Client <mcast_addr> <mcast_port> <operator> <operands>");
+        System.out.println("usage: Client <server_addr> <server_port> <operator> <operands>");
     }
 }
 
 
 class ClientProcess {
-    private SSLClientInterface socket;
+    private SSLClientInterface clientInterface;
 
     public ClientProcess(String hostname, int port) throws IOException {
 
         //Configure the client
         try {
-            this.socket = new SSLClientInterface("client","123456",hostname,port);
+            this.clientInterface = new SSLClientInterface("client","123456",hostname,port);
             System.out.println("Starting handshake");
-            this.socket.handshake();
+            this.clientInterface.handshake();
         } catch (SSLManagerException e) {
             e.printStackTrace();
         }
 
     }
 
-    /*
+
     private void sendMessage(String message) {
-        this.out.println(message);
-        this.log("Sent " + message);
+        try {
+            this.clientInterface.write(message.getBytes());
+            this.log("Sent " + message);
+        }
+        catch (SSLManagerException e) {
+            e.printStackTrace();
+        }
     }
 
     public void register(String dnsName, String ipAddr) {
@@ -84,19 +81,16 @@ class ClientProcess {
 
     public String waitForMessage() throws SocketException {
         //Sets a timeout so that the program does not wait indefinitely
-        this.socket.setSoTimeout(5000);
+        //this.interafce.setSoTimeout(5000);
 
         try {
-            String message = in.readLine();
-            return message;
+            return new String(clientInterface.read(), StandardCharsets.UTF_8);
         }
-        catch (IOException e) {
+        catch (SSLManagerException e) {
             e.printStackTrace();
-            return "Timeout?????";
+            return null;
         }
     }
-
-     */
 
     public void log(String message) {
         System.out.println("Client: " + message);

@@ -1,10 +1,5 @@
-import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLServerSocketFactory;
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -38,25 +33,22 @@ class ServerProcess {
     ServerProcess(int port) throws IOException {
         try {
             this.server= new SSLEngineServer("server","123456",port);
-            while (true) {
-                this.server.accept();
-            }
         } catch (SSLManagerException e) {
             e.printStackTrace();
         }
 
     }
 
-    public void start() throws IOException {
+    public void start() {
         this.log("Started service");
 
         while (true) {
             try {
-                server.accept();
-            } catch (SSLManagerException e) {
+                new ServerProcessThread(server.accept(),this).start();
+            }
+            catch (SSLManagerException e) {
                 e.printStackTrace();
             }
-            //new ServerProcessThread(server.accept(),this).start();
         }
     }
 
@@ -98,14 +90,20 @@ class ServerProcess {
 }
 
 class ServerProcessThread extends Thread {
-    private Socket socket;
+    private SSLServerInterface serverInterface;
     private ServerProcess serverProcess;
 
-    public ServerProcessThread(Socket clientSocket, ServerProcess process) {
+    public ServerProcessThread(SSLServerInterface serverInterface, ServerProcess process) {
         super("ServerProcessThread");
-        this.socket = clientSocket;
+        this.serverInterface = serverInterface;
         this.serverProcess = process;
-
+        try {
+            System.out.println("hand");
+            this.serverInterface.handshake();
+        }
+        catch (SSLManagerException e) {
+            e.printStackTrace();
+        }
     }
 
     private String parseMessage(String message) {
@@ -125,20 +123,15 @@ class ServerProcessThread extends Thread {
     @Override
     public void run() {
         try {
-            PrintWriter out = new PrintWriter(socket.getOutputStream(),true);
-            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-
-            String message = in.readLine();
+            String message = new String(serverInterface.read(), StandardCharsets.UTF_8);
 
             this.serverProcess.log(message);
 
             String reply = this.parseMessage(message);
 
-            out.println(reply);
-
-            socket.close();
+            serverInterface.write(reply.getBytes());
         }
-        catch (IOException e) {
+        catch (SSLManagerException e) {
             e.printStackTrace();
         }
     }
