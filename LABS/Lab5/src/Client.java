@@ -4,7 +4,7 @@ import java.nio.charset.StandardCharsets;
 
 public class Client {
     public static void main(String[] args) throws IOException {
-        if (args.length < 4) {
+        if (args.length < 3) {
             printUsage();
             return;
         }
@@ -25,6 +25,11 @@ public class Client {
             operation = "LOOKUP";
             operands = args[3];
         }
+        else if (args[2].equals("close") && args.length == 3) {
+            operation = "CLOSE";
+            operands = "none";
+            client.shutdownServer();
+        }
         else {
             printUsage();
             return;
@@ -32,6 +37,7 @@ public class Client {
 
         // wait for server answer
         String answer = client.waitForMessage();
+        client.close(); //close the socket
 
         client.log(operation + " " + operands + " : " + answer);
     }
@@ -69,6 +75,15 @@ class ClientProcess {
         }
     }
 
+    public void close() {
+        try {
+            this.clientInterface.close();
+        }
+        catch (SSLManagerException | IOException e) {
+            e.printStackTrace();
+        }
+    }
+
     public void register(String dnsName, String ipAddr) {
         String message = "REGISTER " + dnsName + " " + ipAddr;
         this.sendMessage(message);
@@ -79,12 +94,20 @@ class ClientProcess {
         this.sendMessage(message);
     }
 
-    public String waitForMessage() throws SocketException {
+    public void shutdownServer() {
+        this.sendMessage("CLOSE");
+    }
+
+    public String waitForMessage() {
         //Sets a timeout so that the program does not wait indefinitely
         //this.interafce.setSoTimeout(5000);
 
         try {
-            return new String(clientInterface.read(), StandardCharsets.UTF_8);
+            byte[] bytes = new byte[100000];
+
+            clientInterface.read(bytes);
+
+            return new String(bytes, StandardCharsets.UTF_8);
         }
         catch (SSLManagerException e) {
             e.printStackTrace();

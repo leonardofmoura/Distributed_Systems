@@ -42,4 +42,8 @@ public class SSLEngineServer {
             throw new SSLManagerException(e.getMessage());
         }
     }
+
+    public void close() throws IOException {
+        this.channel.close();
+    }
 }

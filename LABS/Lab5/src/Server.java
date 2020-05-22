@@ -12,13 +12,7 @@ public class Server {
 
         int port = Integer.parseInt(args[0]);
 
-        try {
-            new ServerProcess(port).start();
-        }
-        catch (IOException e) {
-            System.err.println("Error while starting the server");
-            e.getMessage();
-        }
+        new ServerProcess(port).start();
     }
 
     public static void printUsage() {
@@ -29,8 +23,9 @@ public class Server {
 class ServerProcess {
     private SSLEngineServer server;
     private HashMap<String,String> data = new HashMap<>();
+    private boolean running;
 
-    ServerProcess(int port) throws IOException {
+    ServerProcess(int port){
         try {
             this.server= new SSLEngineServer("server","123456",port);
         } catch (SSLManagerException e) {
@@ -41,13 +36,14 @@ class ServerProcess {
 
     public void start() {
         this.log("Started service");
+        running = true;
 
-        while (true) {
+        while (running) {
             try {
                 new ServerProcessThread(server.accept(),this).start();
             }
-            catch (SSLManagerException e) {
-                e.printStackTrace();
+            catch (SSLManagerException e) { //Server Closes
+                System.out.println("Channel Closed");
             }
         }
     }
@@ -77,6 +73,15 @@ class ServerProcess {
         return reply;
     }
 
+    protected void close() {
+        this.running = false;
+        try {
+            this.server.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
     private int getNumKeysValue(String value) {
         int numVals = 0;
         for (Map.Entry<String,String> entry : data.entrySet()) {
@@ -98,7 +103,6 @@ class ServerProcessThread extends Thread {
         this.serverInterface = serverInterface;
         this.serverProcess = process;
         try {
-            System.out.println("hand");
             this.serverInterface.handshake();
         }
         catch (SSLManagerException e) {
@@ -116,6 +120,10 @@ class ServerProcessThread extends Thread {
         else if (tokenMessage[0].equals("LOOKUP") && tokenMessage.length == 2){
             reply = this.serverProcess.lookup(tokenMessage[1]);
         }
+        else if (tokenMessage[0].equals("CLOSE") && tokenMessage.length == 1){
+            this.serverProcess.close();
+            reply = "closing server...";
+        }
 
         return reply;
     }
@@ -123,13 +131,17 @@ class ServerProcessThread extends Thread {
     @Override
     public void run() {
         try {
-            String message = new String(serverInterface.read(), StandardCharsets.UTF_8);
+            byte[] bytes = new byte[100000];
+            int read = serverInterface.read(bytes);
+            String message = new String(bytes,0,read, StandardCharsets.UTF_8);
 
             this.serverProcess.log(message);
 
             String reply = this.parseMessage(message);
 
             serverInterface.write(reply.getBytes());
+
+            serverInterface.waitClose();
         }
         catch (SSLManagerException e) {
             e.printStackTrace();

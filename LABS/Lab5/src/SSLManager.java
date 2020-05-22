@@ -16,7 +16,7 @@ public abstract class SSLManager {
     private SocketChannel channel;
 
     private boolean init = false;
-    private boolean handshakeComplete = false;
+    private boolean handshakeOngoing = false;
 
     private ByteBuffer outAppData;  //The outgoing data before being wrapped by SSLEngine
     private ByteBuffer outNetData;  //The outgoing data after being wrapped by SSLEngine, ready to be sent over the network
@@ -123,65 +123,75 @@ public abstract class SSLManager {
 
     //Assumes all buffers start in write mode
     private SSLEngineResult unwrap() throws SSLManagerException {
-       try {
-           //Process the incoming data
-           this.inNetData.flip(); //prepare the buffer for read
-           SSLEngineResult res = engine.unwrap(this.inNetData,this.inAppData);
-           this.inNetData.compact(); //Save the remaining data in case another packet was received
+        try {
+            //Process the incoming data
+            this.inNetData.flip(); //prepare the buffer for read
+            SSLEngineResult res = engine.unwrap(this.inNetData,this.inAppData);
+            this.inNetData.compact(); //Save the remaining data in case another packet was received
 
-           //Process the status
-           switch (res.getStatus()) {
-               case BUFFER_OVERFLOW:
-                   this.debugPrint("\tbuffer overflow");
-                   if (this.session.getApplicationBufferSize() > this.inAppData.capacity()) {
-                       //Enlarge the inAppData buffer if it is too small
-                       this.inAppData = ByteBuffer.allocate(this.session.getApplicationBufferSize());
-                   }
-                   else {
-                       //The buffer size is enough, so we clear the buffer
-                       //It has data stuck that caused the overflow
-                       this.inAppData.clear();
-                   }
-                   //Retry the operation
-                   return this.unwrap();
+            //Process the status
+            switch (res.getStatus()) {
+                case BUFFER_OVERFLOW:
+                    this.debugPrint("\tbuffer overflow");
+                    if (this.session.getApplicationBufferSize() > this.inAppData.capacity()) {
+                        //Enlarge the inAppData buffer if it is too small
+                        this.inAppData = ByteBuffer.allocate(this.session.getApplicationBufferSize());
+                    }
+                    else {
+                        //The buffer size is enough, so we clear the buffer
+                        //It has data stuck that caused the overflow
+                        this.inAppData.clear();
+                    }
+                    //Retry the operation
+                    return this.unwrap();
 
-               case BUFFER_UNDERFLOW:
-                   this.debugPrint("\tbuffer underflow");
-                   //inNetData needs data -> read from the socket
+                case BUFFER_UNDERFLOW:
+                    this.debugPrint("\tbuffer underflow");
+                    //inNetData needs data -> read from the socket
 
-                   if (!engine.isInboundDone()) {
-                       int bytes = this.channel.read(this.inNetData);
-                       if (bytes < 0) {
-                           //Nothing to read
-                           return res;
-                       }
+                    if (!engine.isInboundDone()) {
+                        int bytes = this.channel.read(this.inNetData);
+                        if (bytes < 0) {
+                            //Nothing to read
+                            return res;
+                        }
 
-                       this.debugPrint("\tchannel read: " + bytes + "bytes");
-                   }
+                        this.debugPrint("\tchannel read: " + bytes + "bytes");
+                    }
 
-                   //TODO check if the data is total when unwrapped
+                    //TODO check if the data is total when unwrapped
 
-                   //Read the data again
-                   return this.unwrap();
+                    //Read the data again
+                    return this.unwrap();
 
-               case CLOSED:
-                   this.debugPrint("\tclosed");
-                   //TODO do something here
-                   //The engine is closed -> can terminate transport layer
-                   return res;
+                case CLOSED:
+                    this.debugPrint("\tclosed");
 
-               case OK:
-                   this.debugPrint("\tOK");
-                   //The unwrap was successful
-                   return res;
+                    //Finish the handshake
+                    while (processHandshakeStatus()) {
+                        //Simply process the status
+                    }
 
-               default:
-                   throw new SSLManagerException("Invalid status after unwrap: " + res.getStatus());
-           }
-       }
-       catch (IOException e) {
-           throw new SSLManagerException(e.getMessage());
-       }
+                    return res;
+
+                case OK:
+                    this.debugPrint("\tOK");
+                    //The unwrap was successful
+
+                    //Process any handshake data
+                    if (!this.handshakeOngoing) {
+                        while (this.processHandshakeStatus());
+                    }
+
+                    return res;
+
+                default:
+                    throw new SSLManagerException("Invalid status after unwrap: " + res.getStatus());
+            }
+        }
+        catch (IOException e) {
+            throw new SSLManagerException(e.getMessage());
+        }
     }
 
     private SSLEngineResult wrapAndSend() throws SSLManagerException {
@@ -215,11 +225,26 @@ public abstract class SSLManager {
 
                 case CLOSED:
                     this.debugPrint("Closed");
+                    //Send anything still in the buffer
+                    this.outNetData.flip();
+
+                    //Send the data through the socket
+                    int send = channel.write(this.outNetData);
+                    this.debugPrint("\tchannel write: " + send + "bytes");
+
                     //TODO deal with this
                     return res;
 
                 case OK:
                     this.debugPrint("OK");
+
+                    //Process any required handshake data
+                    if (!this.handshakeOngoing) {
+                        while (processHandshakeStatus()) {
+                            //Simply process the status
+                        }
+                    }
+
                     //Turn outNetData to read mode
                     this.outNetData.flip();
 
@@ -239,6 +264,45 @@ public abstract class SSLManager {
         }
     }
 
+    private boolean processHandshakeStatus() throws SSLManagerException {
+        switch (engine.getHandshakeStatus()) {
+            case NEED_UNWRAP:
+                this.handshakeOngoing = true;
+                this.debugPrint("NEED UNWRAP");
+                SSLEngineResult unwrapRes = this.unwrap();
+                this.debugPrint("UNWRAPPED");
+
+                return true;
+
+            case NEED_WRAP:
+                this.handshakeOngoing = true;
+                this.debugPrint("NEED WRAP");
+                SSLEngineResult wrapRes = this.wrapAndSend();
+                this.debugPrint("WRAPPED");
+
+                return true;
+
+            case NEED_TASK:
+                this.handshakeOngoing = true;
+                //Run all the tasks
+                //TODO maybe make this concurrent with threads
+                Runnable task;
+                while ((task = engine.getDelegatedTask()) != null) {
+                    task.run();
+                    this.debugPrint("Executed task task");
+                }
+                return true;
+
+            case FINISHED:
+            case NOT_HANDSHAKING:
+                this.handshakeOngoing = false;
+                return false;
+
+            default:
+                throw new SSLManagerException("Unknown handhake status " + engine.getHandshakeStatus());
+        }
+    }
+
     public void handshake() throws SSLManagerException {
         this.checkInit();
 
@@ -246,71 +310,65 @@ public abstract class SSLManager {
         try {
             engine.beginHandshake();
             System.out.println("System started handshake");
-            SSLEngineResult.HandshakeStatus status = engine.getHandshakeStatus();
 
-            while (status != SSLEngineResult.HandshakeStatus.FINISHED && status != SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) {
-                switch (status) {
-                    case NEED_UNWRAP:
-                        this.debugPrint("NEED UNWRAP");
-                        SSLEngineResult unwrapRes = this.unwrap();
-                        this.debugPrint("UNWRAPPED");
-
-                        status = unwrapRes.getHandshakeStatus();
-                        break;
-
-                    case NEED_WRAP:
-                        this.debugPrint("NEED WRAP");
-                        SSLEngineResult wrapRes = this.wrapAndSend();
-                        this.debugPrint("WRAPPED");
-
-                        status = wrapRes.getHandshakeStatus();
-                        break;
-
-                    case NEED_TASK:
-                        //Run all the tasks
-                        //TODO maybe make this concurrent with threads
-                        Runnable task;
-                        while ((task = engine.getDelegatedTask()) != null) {
-                            task.run();
-                            this.debugPrint("Executed task task");
-                        }
-                        status = engine.getHandshakeStatus();
-                        break;
-                }
+            while (processHandshakeStatus()) {
+                //Simply process the handshake
             }
 
-            System.out.println("Handshake finished with status" + status.toString());
-            this.handshakeComplete = true;
+            System.out.println("Handshake finished");
         }
         catch (SSLException e) {
-           throw new SSLManagerException(e.getMessage());
+            throw new SSLManagerException(e.getMessage());
         }
     }
 
-    public byte[] read() throws SSLManagerException {
-        if (handshakeComplete) {
-            this.unwrap();
-            this.inAppData.flip();
+    public int read(byte[] message) throws SSLManagerException {
+        debugPrint("READ CALLED");
 
-            byte[] ret = new byte[this.inAppData.remaining()];
-            this.inAppData.get(ret);
+        this.unwrap();
+        this.inAppData.flip();
 
-            return ret;
-        }
-        else {
-            throw new SSLManagerException("Handshake must be preformed before reading");
-        }
+        int packLen = this.inAppData.remaining();
+
+        this.inAppData.get(message,0,packLen);
+
+        debugPrint("READ " + packLen + " bytes");
+
+        return packLen;
     }
 
     public int write(byte[] msg) throws SSLManagerException {
-        if (handshakeComplete) {
-            this.outAppData.put(msg);
+        debugPrint("WRITE CALLED");
 
-            SSLEngineResult res = this.wrapAndSend();
-            return res.bytesProduced();
+        this.outAppData.put(msg);
+
+        SSLEngineResult res = this.wrapAndSend();
+
+        debugPrint("WRITTEN " + res.bytesProduced() + " bytes");
+
+        return res.bytesProduced();
+    }
+
+    public void close() throws SSLManagerException, IOException {
+        if (!engine.isOutboundDone()) {
+            engine.closeOutbound();
+
+            while (processHandshakeStatus()) {
+                //Process the handshake
+            }
         }
-        else {
-            throw new SSLManagerException("Handshake must be preformed before writing");
+        else if (!engine.isInboundDone()) {
+            engine.closeInbound();
+            processHandshakeStatus();
         }
+
+        channel.close();
+    }
+
+    public void waitClose() throws SSLManagerException {
+        //to wait for a close we simply need to unwrap and the function processes the handshake
+        debugPrint("WAITING CLOSING HANDSHAKE");
+        this.unwrap();
+        debugPrint("CLOSE HANDSHAKE COMPLETED");
     }
 }
