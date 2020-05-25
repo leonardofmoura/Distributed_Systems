@@ -1,11 +1,11 @@
 import javax.net.ssl.SSLContext;
-import java.nio.channels.SocketChannel;
+import java.nio.channels.AsynchronousSocketChannel;
 
 public class SSLServerInterface extends SSLManager {
     private SSLContext context;
-    private SocketChannel channel;
+    private AsynchronousSocketChannel channel;
 
-    public SSLServerInterface(SocketChannel channel,SSLContext context) throws SSLManagerException {
+    public SSLServerInterface(AsynchronousSocketChannel channel,SSLContext context) throws SSLManagerException {
         super();
 
         this.context = context;

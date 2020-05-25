@@ -51,13 +51,14 @@ public class Client {
 class ClientProcess {
     private SSLClientInterface clientInterface;
 
-    public ClientProcess(String hostname, int port) throws IOException {
+    public ClientProcess(String hostname, int port) {
 
         //Configure the client
         try {
             this.clientInterface = new SSLClientInterface("client","123456",hostname,port);
-            System.out.println("Starting handshake");
-            this.clientInterface.handshake();
+            if (!this.clientInterface.handshake()) {
+                System.exit(1);
+            }
         } catch (SSLManagerException e) {
             e.printStackTrace();
         }

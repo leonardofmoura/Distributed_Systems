@@ -97,17 +97,16 @@ class ServerProcess {
 class ServerProcessThread extends Thread {
     private SSLServerInterface serverInterface;
     private ServerProcess serverProcess;
+    private boolean handshake = false;
 
     public ServerProcessThread(SSLServerInterface serverInterface, ServerProcess process) {
         super("ServerProcessThread");
         this.serverInterface = serverInterface;
         this.serverProcess = process;
-        try {
-            this.serverInterface.handshake();
+        if(this.serverInterface.handshake()) {
+            this.handshake = true;
         }
-        catch (SSLManagerException e) {
-            e.printStackTrace();
-        }
+
     }
 
     private String parseMessage(String message) {
@@ -130,21 +129,23 @@ class ServerProcessThread extends Thread {
 
     @Override
     public void run() {
-        try {
-            byte[] bytes = new byte[100000];
-            int read = serverInterface.read(bytes);
-            String message = new String(bytes,0,read, StandardCharsets.UTF_8);
+        if (this.handshake) {
+            try {
+                byte[] bytes = new byte[100000];
+                int read = serverInterface.read(bytes);
+                String message = new String(bytes,0,read, StandardCharsets.UTF_8);
 
-            this.serverProcess.log(message);
+                this.serverProcess.log(message);
 
-            String reply = this.parseMessage(message);
+                String reply = this.parseMessage(message);
 
-            serverInterface.write(reply.getBytes());
+                serverInterface.write(reply.getBytes());
 
-            serverInterface.waitClose();
-        }
-        catch (SSLManagerException e) {
-            e.printStackTrace();
+                serverInterface.waitClose();
+            }
+            catch (SSLManagerException e) {
+                e.printStackTrace();
+            }
         }
     }
 }

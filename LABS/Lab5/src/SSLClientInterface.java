@@ -1,7 +1,7 @@
 import javax.net.ssl.SSLContext;
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.nio.channels.SocketChannel;
+import java.nio.channels.AsynchronousSocketChannel;
 
 public class SSLClientInterface extends SSLManager {
     private String passphrase;
@@ -9,7 +9,7 @@ public class SSLClientInterface extends SSLManager {
     private InetSocketAddress address;
 
     private SSLContext context;
-    private SocketChannel channel;
+    private AsynchronousSocketChannel channel;
 
     public SSLClientInterface(String managerId, String passphrase, String hostname, int port) throws SSLManagerException {
         super();
@@ -24,7 +24,7 @@ public class SSLClientInterface extends SSLManager {
             this.context = SSLManager.initSSLContext(this.managerId,this.passphrase);
 
             //Create the socket channel
-            this.channel = SocketChannel.open();
+            this.channel = AsynchronousSocketChannel.open();
 
             //Connect the channel
             this.channel.connect(new InetSocketAddress(hostname,port));

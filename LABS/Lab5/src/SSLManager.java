@@ -3,9 +3,13 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.SocketChannel;
+import java.nio.channels.AsynchronousSocketChannel;
 import java.security.*;
 import java.security.cert.CertificateException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 public abstract class SSLManager {
     static boolean DEBUG = false;
@@ -13,7 +17,7 @@ public abstract class SSLManager {
     private SSLContext context;
     private SSLSession session;
     private SSLEngine engine;
-    private SocketChannel channel;
+    private AsynchronousSocketChannel channel;
 
     private boolean init = false;
     private boolean handshakeOngoing = false;
@@ -55,7 +59,7 @@ public abstract class SSLManager {
 
     public SSLManager() {}
 
-    public SSLManager(SocketChannel channel,InetSocketAddress address, SSLContext context, boolean client) throws SSLManagerException {
+    public SSLManager(AsynchronousSocketChannel channel,InetSocketAddress address, SSLContext context, boolean client) throws SSLManagerException {
         this.init(channel,address,context,client);
     }
 
@@ -67,7 +71,7 @@ public abstract class SSLManager {
         this.inNetData = ByteBuffer.allocate(session.getPacketBufferSize());
     }
 
-    protected void init(SocketChannel channel,InetSocketAddress address, SSLContext context, boolean client) throws SSLManagerException {
+    protected void init(AsynchronousSocketChannel channel,InetSocketAddress address, SSLContext context, boolean client) throws SSLManagerException {
         this.context = context;
         this.channel = channel;
 
@@ -88,7 +92,7 @@ public abstract class SSLManager {
         }
     }
 
-    protected void init(SocketChannel channel, SSLContext context, boolean client) throws SSLManagerException {
+    protected void init(AsynchronousSocketChannel channel, SSLContext context, boolean client) throws SSLManagerException {
         this.context = context;
         this.channel = channel;
 
@@ -122,7 +126,7 @@ public abstract class SSLManager {
     }
 
     //Assumes all buffers start in write mode
-    private SSLEngineResult unwrap() throws SSLManagerException {
+    private SSLEngineResult unwrap() throws SSLManagerException, TimeoutException {
         try {
             //Process the incoming data
             this.inNetData.flip(); //prepare the buffer for read
@@ -150,7 +154,9 @@ public abstract class SSLManager {
                     //inNetData needs data -> read from the socket
 
                     if (!engine.isInboundDone()) {
-                        int bytes = this.channel.read(this.inNetData);
+                        Future<Integer> fBytes = channel.read(this.inNetData);
+                        int bytes = fBytes.get(1000, TimeUnit.MILLISECONDS);
+
                         if (bytes < 0) {
                             //Nothing to read
                             return res;
@@ -158,8 +164,6 @@ public abstract class SSLManager {
 
                         this.debugPrint("\tchannel read: " + bytes + "bytes");
                     }
-
-                    //TODO check if the data is total when unwrapped
 
                     //Read the data again
                     return this.unwrap();
@@ -189,12 +193,12 @@ public abstract class SSLManager {
                     throw new SSLManagerException("Invalid status after unwrap: " + res.getStatus());
             }
         }
-        catch (IOException e) {
+        catch (IOException | ExecutionException | InterruptedException e) {
             throw new SSLManagerException(e.getMessage());
         }
     }
 
-    private SSLEngineResult wrapAndSend() throws SSLManagerException {
+    private SSLEngineResult wrapAndSend() throws SSLManagerException, TimeoutException {
         try {
             //Empty the network buffer
             outNetData.clear();
@@ -229,7 +233,8 @@ public abstract class SSLManager {
                     this.outNetData.flip();
 
                     //Send the data through the socket
-                    int send = channel.write(this.outNetData);
+                    Future<Integer> send = channel.write(this.outNetData);
+                    int sent = send.get(1000, TimeUnit.MILLISECONDS);
                     this.debugPrint("\tchannel write: " + send + "bytes");
 
                     //TODO deal with this
@@ -249,7 +254,8 @@ public abstract class SSLManager {
                     this.outNetData.flip();
 
                     //Send the data through the socket
-                    int bytes = channel.write(this.outNetData);
+                    Future<Integer> sending = channel.write(this.outNetData);
+                    int bytes = sending.get(1000, TimeUnit.MILLISECONDS);
                     this.debugPrint("\tchannel write: " + bytes + "bytes");
                     this.outNetData.compact();
 
@@ -259,12 +265,12 @@ public abstract class SSLManager {
                     return res;
             }
         }
-        catch (IOException e) {
+        catch (IOException | ExecutionException | InterruptedException e) {
             throw new SSLManagerException(e.getMessage());
         }
     }
 
-    private boolean processHandshakeStatus() throws SSLManagerException {
+    private boolean processHandshakeStatus() throws SSLManagerException, TimeoutException {
         switch (engine.getHandshakeStatus()) {
             case NEED_UNWRAP:
                 this.handshakeOngoing = true;
@@ -303,11 +309,11 @@ public abstract class SSLManager {
         }
     }
 
-    public void handshake() throws SSLManagerException {
-        this.checkInit();
-
+    public boolean handshake() {
         //Begin the handshake
         try {
+            this.checkInit();
+
             engine.beginHandshake();
             System.out.println("System started handshake");
 
@@ -316,16 +322,22 @@ public abstract class SSLManager {
             }
 
             System.out.println("Handshake finished");
+            return true;
         }
-        catch (SSLException e) {
-            throw new SSLManagerException(e.getMessage());
+        catch (SSLException | SSLManagerException | TimeoutException e) {
+            System.out.println(e.getMessage());
+            return false;
         }
     }
 
     public int read(byte[] message) throws SSLManagerException {
         debugPrint("READ CALLED");
 
-        this.unwrap();
+        try {
+            this.unwrap();
+        } catch (TimeoutException e) {
+            return -1;
+        }
         this.inAppData.flip();
 
         int packLen = this.inAppData.remaining();
@@ -342,33 +354,52 @@ public abstract class SSLManager {
 
         this.outAppData.put(msg);
 
-        SSLEngineResult res = this.wrapAndSend();
+        SSLEngineResult res = null;
+        try {
+            res = this.wrapAndSend();
+        } catch (TimeoutException e) {
+            return -1;
+        }
 
         debugPrint("WRITTEN " + res.bytesProduced() + " bytes");
 
         return res.bytesProduced();
     }
 
-    public void close() throws SSLManagerException, IOException {
+    public boolean close() throws SSLManagerException, IOException {
         if (!engine.isOutboundDone()) {
             engine.closeOutbound();
 
-            while (processHandshakeStatus()) {
-                //Process the handshake
+            while (true) {
+                try {
+                    if (!processHandshakeStatus()) break;
+                } catch (TimeoutException e) {
+                    return false;
+                }
             }
         }
         else if (!engine.isInboundDone()) {
             engine.closeInbound();
-            processHandshakeStatus();
+            try {
+                processHandshakeStatus();
+            } catch (TimeoutException e) {
+                return false;
+            }
         }
 
         channel.close();
+        return true;
     }
 
-    public void waitClose() throws SSLManagerException {
+    public boolean waitClose() throws SSLManagerException {
         //to wait for a close we simply need to unwrap and the function processes the handshake
         debugPrint("WAITING CLOSING HANDSHAKE");
-        this.unwrap();
+        try {
+            this.unwrap();
+        } catch (TimeoutException e) {
+            return false;
+        }
         debugPrint("CLOSE HANDSHAKE COMPLETED");
+        return true;
     }
 }
