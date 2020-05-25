@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousSocketChannel;
+import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.security.cert.CertificateException;
 import java.util.concurrent.ExecutionException;
@@ -347,6 +348,26 @@ public abstract class SSLManager {
         debugPrint("READ " + packLen + " bytes");
 
         return packLen;
+    }
+
+    public String readln() throws SSLManagerException {
+        debugPrint("READLN CALLED");
+
+        try {
+            this.unwrap();
+        } catch (TimeoutException e) {
+            throw new SSLManagerException(e.getMessage());
+        }
+
+        this.inAppData.flip();
+
+        int pacLen = this.inAppData.remaining();
+        byte[] preString = new byte[pacLen];
+        this.inAppData.get(preString,0,pacLen);
+
+        debugPrint("READ " + pacLen + " bytes");
+
+        return new String(preString, StandardCharsets.UTF_8);
     }
 
     public int write(byte[] msg) throws SSLManagerException {
